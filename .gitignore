@@ -1,0 +1,14 @@
+﻿# Bỏ qua thư mục thư viện
+node_modules/
+**/node_modules/
+
+# Bảo mật: Không bao giờ đẩy file chứa mật khẩu DB và JWT lên GitHub
+.env
+**/.env
+.env.local
+
+# Bỏ qua file build và cấu hình cá nhân
+dist/
+build/
+.vscode/
+.DS_Store
