@@ -1,28 +1,27 @@
 const express = require('express');
 const cors = require('cors');
-const mongoose = require('mongoose');
+const compression = require('compression');
 const connectDB = require('./config/db');
 const { errorHandler, notFound } = require('./middleware/errorMiddleware');
-const { protect } = require('./middleware/authMiddleware');
+const { logUniqueClientError } = require('./services/logService');
 
 const authRoutes = require('./routes/authRoutes');
 const questionRoutes = require('./routes/questionRoutes');
 const examRoutes = require('./routes/examRoutes');
-
-const Exam = require('./models/Exam');
-const Result = require('./models/Result');
+const attemptRoutes = require('./routes/attemptRoutes');
+const resultRoutes = require('./routes/resultRoutes');
 
 const app = express();
 
+app.use(compression());
 app.use(
   cors({
     origin: process.env.CLIENT_URL || '*',
     credentials: true,
   })
 );
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
-// Đảm bảo kết nối DB trước mọi request (quan trọng khi deploy Vercel)
 app.use(async (req, res, next) => {
   try {
     await connectDB();
@@ -32,100 +31,39 @@ app.use(async (req, res, next) => {
   }
 });
 
-// Route kiểm tra server
 app.get('/', (req, res) => {
-  res.json({ message: 'Online Exam Platform API is running...' });
+  res.json({
+    status: 'OK',
+    message: 'Online Exam Platform API is running...',
+    serverTime: Date.now(),
+  });
 });
 
-// Các cụm API chính của TV1
-app.use('/api/auth', authRoutes);
-app.use('/api/questions', questionRoutes);
-app.use('/api/exams', examRoutes);
-
-// 1. Bắt đầu làm bài thi (Trả về câu hỏi đã ẩn đáp án đúng)
-app.get('/api/attempts/start/:examId', protect, async (req, res, next) => {
-  try {
-    const exam = await Exam.findById(req.params.examId).populate(
-      'questions',
-      '-correctOption'
-    );
-    if (!exam) {
-      res.status(404);
-      throw new Error('Không tìm thấy đề thi');
-    }
-    res.json({ success: true, data: exam });
-  } catch (err) {
-    next(err);
-  }
+app.post('/api/logs/client-error', (req, res) => {
+  const { examId, errorCode, message } = req.body;
+  const result = logUniqueClientError({
+    studentId: req.user?._id?.toString() || 'client-user',
+    examId,
+    errorCode,
+    message,
+  });
+  res.status(200).json({ success: true, ...result });
 });
 
-// 2. Nộp bài thi, chấm điểm tự động và lưu vào MongoDB
-app.post('/api/attempts/submit/:examId', protect, async (req, res, next) => {
-  try {
-    const exam = await Exam.findById(req.params.examId).populate('questions');
-    if (!exam) {
-      res.status(404);
-      throw new Error('Không tìm thấy đề thi');
-    }
+// Kiểm tra tự động xem file route nào chưa export đúng router
+const routeMap = [
+  ['/api/auth', authRoutes, 'authRoutes.js'],
+  ['/api/questions', questionRoutes, 'questionRoutes.js'],
+  ['/api/exams', examRoutes, 'examRoutes.js'],
+  ['/api/attempts', attemptRoutes, 'attemptRoutes.js'],
+  ['/api/results', resultRoutes, 'resultRoutes.js'],
+];
 
-    const { answers } = req.body;
-    let correctCount = 0;
-    const detailedAnswers = [];
-
-    exam.questions.forEach((q) => {
-      const selected = answers ? answers[q._id.toString()] : null;
-      const isCorrect = selected === q.correctOption;
-      if (isCorrect) correctCount++;
-
-      detailedAnswers.push({
-        questionId: q._id,
-        selectedOption: selected || '',
-        isCorrect,
-      });
-    });
-
-    const total = exam.questions.length;
-    const wrongCount = total - correctCount;
-    const score = total > 0 ? Number(((correctCount / total) * 10).toFixed(2)) : 0;
-
-    // Lưu đúng cấu trúc schema Result có sẵn của dự án
-    const savedResult = await Result.create({
-      attemptId: new mongoose.Types.ObjectId(),
-      examId: exam._id,
-      studentId: req.user._id,
-      answers: detailedAnswers,
-      correctCount,
-      wrongCount,
-      totalQuestions: total,
-      score,
-    });
-
-    res.status(201).json({
-      success: true,
-      result: {
-        resultId: savedResult._id,
-        examTitle: exam.title,
-        correctCount,
-        wrongCount,
-        totalQuestions: total,
-        score,
-      },
-    });
-  } catch (err) {
-    next(err);
+routeMap.forEach(([path, handler, fileName]) => {
+  if (typeof handler !== 'function') {
+    throw new Error(`❌ File backend/src/routes/${fileName} đang bị rỗng hoặc thiếu "module.exports = router;"`);
   }
-});
-
-// 3. Lấy lịch sử làm bài của Sinh viên đang đăng nhập
-app.get('/api/results/my-history', protect, async (req, res, next) => {
-  try {
-    const history = await Result.find({ studentId: req.user._id })
-      .populate('examId', 'title roomCode durationMinutes')
-      .sort({ createdAt: -1 });
-    res.json({ success: true, data: history });
-  } catch (err) {
-    next(err);
-  }
+  app.use(path, handler);
 });
 
 app.use(notFound);

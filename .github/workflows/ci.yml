@@ -1,0 +1,46 @@
+name: CI/CD Pipeline - Online Exam Platform
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  backend-check:
+    name: Backend Syntax & Dependency Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - name: Kiểm tra cú pháp các file nguồn Node.js
+        run: |
+          node --check server.js
+          node --check src/app.js
+          node --check src/controllers/attemptController.js
+          node --check src/services/logService.js
+
+  frontend-build:
+    name: Frontend React Build Verification
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Build kiểm thử React Production Bundle
+        run: npm run build
