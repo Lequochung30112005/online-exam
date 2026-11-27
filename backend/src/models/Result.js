@@ -1,21 +1,35 @@
 const mongoose = require('mongoose');
 
-const resultSchema = new mongoose.Schema({
-  attemptId: { type: mongoose.Schema.Types.ObjectId, ref: 'ExamAttempt', required: true },
-  examId: { type: mongoose.Schema.Types.ObjectId, ref: 'Exam', required: true },
-  studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  totalQuestions: { type: Number, required: true },
-  correctCount: { type: Number, required: true },
-  wrongCount: { type: Number, required: true },
-  score: { type: Number, required: true },
-  details: [
-    {
-      questionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Question' },
-      selectedOption: { type: String, default: null },
-      correctOption: { type: String, required: true },
-      isCorrect: { type: Boolean, required: true }
-    }
-  ]
-}, { timestamps: true });
+const resultSchema = new mongoose.Schema(
+  {
+    attemptId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ExamAttempt',
+      required: false,
+    },
+    examId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Exam',
+      required: true,
+    },
+    studentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+    answers: [
+      {
+        questionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Question' },
+        selectedOption: { type: String, default: '' },
+        isCorrect: { type: Boolean, default: false },
+      },
+    ],
+    correctCount: { type: Number, required: true, default: 0 },
+    wrongCount: { type: Number, required: true, default: 0 },
+    totalQuestions: { type: Number, required: true, default: 0 },
+    score: { type: Number, required: true, default: 0 },
+  },
+  { timestamps: true }
+);
 
 module.exports = mongoose.model('Result', resultSchema);

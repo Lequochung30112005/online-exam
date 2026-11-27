@@ -1,18 +1,53 @@
 const Exam = require('../models/Exam');
 const Result = require('../models/Result');
 
-// POST /api/exams (Giáo viên tạo đề thi)
+const parseVNDateTime = (dtStr) => {
+  if (!dtStr) return null;
+  const hasTimezone = /([+-]\d{2}:\d{2}|Z)$/.test(dtStr);
+  return new Date(hasTimezone ? dtStr : `${dtStr}+07:00`);
+};
+
+// @desc    Giáo viên tạo đề thi chuẩn quốc tế (Lịch VN + Quy chế trộn đề & giới hạn lượt thi)
+// @route   POST /api/exams
 const createExam = async (req, res, next) => {
   try {
-    const { title, description, durationMinutes, questions, roomCode } = req.body;
+    const {
+      title,
+      description,
+      durationMinutes,
+      questions,
+      roomCode,
+      startTime,
+      endTime,
+      maxAttempts,
+      shuffleQuestions,
+      shuffleOptions,
+      showResultReview,
+    } = req.body;
+
+    const parsedStartTime = parseVNDateTime(startTime) || new Date();
+    const parsedEndTime = parseVNDateTime(endTime);
+
+    if (parsedEndTime && parsedEndTime <= parsedStartTime) {
+      res.status(400);
+      throw new Error('Thời gian đóng phòng thi phải sau thời gian bắt đầu!');
+    }
+
     const examData = {
       title,
       description,
       durationMinutes,
       questions,
-      createdBy: req.user._id
+      startTime: parsedStartTime,
+      endTime: parsedEndTime,
+      maxAttempts: Number(maxAttempts) || 1,
+      shuffleQuestions: Boolean(shuffleQuestions),
+      shuffleOptions: Boolean(shuffleOptions),
+      showResultReview: showResultReview !== undefined ? Boolean(showResultReview) : true,
+      createdBy: req.user._id,
     };
-    if (roomCode) examData.roomCode = roomCode.toUpperCase();
+
+    if (roomCode) examData.roomCode = roomCode.trim().toUpperCase();
 
     const exam = await Exam.create(examData);
     res.status(201).json({ success: true, data: exam });
@@ -21,95 +56,126 @@ const createExam = async (req, res, next) => {
   }
 };
 
-// GET /api/exams (GV xem đề của mình, SV xem danh sách đề đang mở)
+// @desc    Lấy danh sách đề thi
+// @route   GET /api/exams
 const getExams = async (req, res, next) => {
   try {
-    const filter = req.user.role === 'teacher' 
-      ? { createdBy: req.user._id } 
-      : { isPublished: true };
-
+    const filter = req.user.role === 'teacher' ? { createdBy: req.user._id } : {};
     const exams = await Exam.find(filter)
-      .select('-questions') // Không trả danh sách ID câu hỏi ở màn danh sách
       .populate('createdBy', 'fullName')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
-    // Đếm số lượng câu hỏi cho từng đề
-    const rawExams = await Exam.find(filter).select('_id questions');
-    const countMap = {};
-    rawExams.forEach(e => { countMap[e._id.toString()] = e.questions.length; });
-
-    const formatted = exams.map(exam => ({
-      ...exam.toObject(),
-      questionCount: countMap[exam._id.toString()] || 0
+    const formatted = exams.map((ex) => ({
+      ...ex,
+      questionCount: ex.questions ? ex.questions.length : 0,
     }));
 
-    res.json({ success: true, data: formatted });
+    res.json({ success: true, serverTime: Date.now(), data: formatted });
   } catch (error) {
     next(error);
   }
 };
 
-// GET /api/exams/room/:roomCode (Sinh viên tìm đề thi bằng mã phòng)
-const getExamByRoomCode = async (req, res, next) => {
+// @desc    Xóa đề thi (Chỉ giảng viên tạo đề mới được xóa)
+// @route   DELETE /api/exams/:id
+const deleteExam = async (req, res, next) => {
   try {
-    const exam = await Exam.findOne({ 
-      roomCode: req.params.roomCode.toUpperCase(),
-      isPublished: true 
-    }).populate('createdBy', 'fullName');
+    const exam = await Exam.findOneAndDelete({
+      _id: req.params.id,
+      createdBy: req.user._id,
+    });
 
     if (!exam) {
-      return res.status(404).json({ success: false, message: 'Mã phòng thi không tồn tại hoặc đã đóng' });
+      res.status(404);
+      throw new Error('Không tìm thấy đề thi hoặc bạn không có quyền xóa');
+    }
+
+    res.json({ success: true, message: 'Đã xóa đề thi thành công' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Tra cứu phòng thi theo mã phòng
+// @route   GET /api/exams/room/:roomCode
+const getExamByRoomCode = async (req, res, next) => {
+  try {
+    const exam = await Exam.findOne({
+      roomCode: req.params.roomCode.trim().toUpperCase(),
+    })
+      .populate('createdBy', 'fullName')
+      .lean();
+
+    if (!exam) {
+      res.status(404);
+      throw new Error('Không tìm thấy phòng thi với mã này');
     }
 
     res.json({
       success: true,
+      serverTime: Date.now(),
       data: {
         _id: exam._id,
         title: exam.title,
         description: exam.description,
-        roomCode: exam.roomCode,
         durationMinutes: exam.durationMinutes,
-        questionCount: exam.questions.length,
-        teacherName: exam.createdBy?.fullName
-      }
+        roomCode: exam.roomCode,
+        startTime: exam.startTime || exam.createdAt,
+        endTime: exam.endTime || null,
+        maxAttempts: exam.maxAttempts || 1,
+        shuffleQuestions: exam.shuffleQuestions,
+        shuffleOptions: exam.shuffleOptions,
+        questionCount: exam.questions ? exam.questions.length : 0,
+        teacherName: exam.createdBy?.fullName || 'Giảng viên',
+      },
     });
   } catch (error) {
     next(error);
   }
 };
 
-// GET /api/exams/:id/participants (Giáo viên xem danh sách SV thi và bảng điểm)
+// @desc    Giáo viên xem bảng điểm của lớp theo đề thi
+// @route   GET /api/exams/:id/participants
 const getExamParticipants = async (req, res, next) => {
   try {
-    const exam = await Exam.findById(req.params.id);
+    const [exam, results] = await Promise.all([
+      Exam.findById(req.params.id).lean(),
+      Result.find({ examId: req.params.id })
+        .populate('studentId', 'fullName studentCode email')
+        .sort({ createdAt: -1 })
+        .lean(),
+    ]);
+
     if (!exam) {
-      return res.status(404).json({ success: false, message: 'Không tìm thấy đề thi' });
+      res.status(404);
+      throw new Error('Không tìm thấy đề thi');
     }
 
-    const results = await Result.find({ examId: req.params.id })
-      .populate('studentId', 'fullName email studentCode')
-      .sort({ score: -1, createdAt: 1 });
-
-    const formattedResults = results.map(r => ({
+    const formattedResults = results.map((r) => ({
       resultId: r._id,
-      studentName: r.studentId?.fullName || 'Ẩn danh',
+      studentName: r.studentId?.fullName || 'Sinh viên',
       studentCode: r.studentId?.studentCode || 'N/A',
-      email: r.studentId?.email,
       score: r.score,
       correctCount: r.correctCount,
       totalQuestions: r.totalQuestions,
-      submittedAt: r.createdAt
+      submittedAt: r.createdAt,
     }));
 
     res.json({
       success: true,
       examTitle: exam.title,
-      roomCode: exam.roomCode,
-      results: formattedResults
+      results: formattedResults,
     });
   } catch (error) {
     next(error);
   }
 };
 
-module.exports = { createExam, getExams, getExamByRoomCode, getExamParticipants };
+module.exports = {
+  createExam,
+  getExams,
+  deleteExam,
+  getExamByRoomCode,
+  getExamParticipants,
+};
